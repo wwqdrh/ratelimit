@@ -1,4 +1,5 @@
-<p align='center'>
+
+<div align='center'>
   <pre style="float:center">
  _  .-')      ('-.      .-') _       ('-.                         _   .-')               .-') _    
 ( \( -O )    ( OO ).-. (  OO) )    _(  OO)                       ( '.( OO )_            (  OO) )   
@@ -10,7 +11,11 @@
  |  |\  \    |  | |  |    |  |     |  `---.  |      |  (_|  |     |  |   |  | (_|  |       |  |    
  `--' '--'   `--' `--'    `--'     `------'  `------'    `--'     `--'   `--'   `--'       `--'    
   </pre>
-</p>
+  <p>
+  [![Build Status](https://github.com/wwqdrh/ratelimit/actions/workflows/push.yml/badge.svg)](https://github.com/wwqdrh/ratelimit/actions)
+  [![codecov](https://codecov.io/gh/wwqdrh/ratelimit/branch/main/graph/badge.svg?token=e41ZDcj06N)](https://codecov.io/gh/wwqdrh/ratelimit)
+  </p>
+</div>
 
 # Usage
 
