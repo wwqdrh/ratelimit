@@ -7,46 +7,41 @@ import (
 	"time"
 )
 
-type realClock struct{}
+// a base wrapper
+type tokenBucket struct {
+	fillInterval time.Duration
+	cap          int64
+	quantum      int64
 
-func (realClock) Now() time.Time {
-	return time.Now()
+	data sync.Map
 }
 
-func (realClock) Sleep(d time.Duration) {
-	time.Sleep(d)
+// if not exist, create
+func (m *tokenBucket) GetBucket(key string) *Bucket {
+	val, _ := m.data.LoadOrStore(key, func() *Bucket {
+		bucket := newBucket(m.fillInterval, m.cap, BucketWithQuantum(m.quantum))
+		return bucket
+	}())
+	return val.(*Bucket)
 }
 
 type Bucket struct {
 	clock Clock
 
-	// startTime holds the moment when the bucket was
-	// first created and ticks began.
-	startTime time.Time
+	startTime time.Time // bucket start time
 
-	// capacity holds the overall capacity of the bucket.
 	capacity int64
 
 	rate float64
 
-	// quantum holds how many tokens are added on
-	// each tick.
-	quantum int64
+	quantum int64 // added on each tick
 
-	// fillInterval holds the interval between each tick.
-	fillInterval time.Duration
+	fillInterval time.Duration // the tick interval
 
-	// mu guards the fields below it.
 	mu *sync.Mutex
 
-	// availableTokens holds the number of available
-	// tokens as of the associated latestTick.
-	// It will be negative when there are consumers
-	// waiting for tokens.
 	availableTokens int64
 
-	// latestTick holds the latest tick for which
-	// we know the number of tokens in the bucket.
 	latestTick int64
 }
 
@@ -100,18 +95,19 @@ func newBucket(fillInterval time.Duration, capacity int64, opts ...bucketOpt) *B
 	for _, opt := range opts {
 		opt(buck)
 	}
+
 	for quantum := int64(1); quantum < 1<<50; quantum = nextQuantum(quantum) {
-		fillInterval := time.Duration(1e9 * float64(quantum) / buck.rate)
+		fillInterval := time.Duration(float64(time.Second) * float64(quantum) / buck.rate)
 		if fillInterval <= 0 {
 			continue
 		}
 		buck.fillInterval = fillInterval
 		buck.quantum = quantum
 		if diff := math.Abs(buck.Rate() - buck.rate); diff/buck.rate <= rateMargin {
+			// mean the interval cocret
 			return buck
 		}
 	}
-	// fmt.Sprint("cannot find suitable quantum for " + strconv.FormatFloat(buck.rate, 'g', -1, 64))
 	return buck
 }
 

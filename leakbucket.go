@@ -3,28 +3,44 @@ package ratelimit
 // 漏桶实现
 
 import (
+	"sync"
 	"sync/atomic"
 	"time"
-	"unsafe"
 
 	"github.com/benbjohnson/clock"
 )
 
-type leakOption func(c *config)
+type leakLimiter interface {
+	Take() time.Time
+}
+
+type leakyBucket struct {
+	rate int
+
+	data sync.Map
+}
+
+func (m *leakyBucket) GetBucket(key string) leakLimiter {
+	val, _ := m.data.LoadOrStore(key, NewAtomicInt64Based(m.rate))
+	return val.(leakLimiter)
+}
 
 type config struct {
 	clock Clock
-	slack int
-	per   time.Duration
+	slack int           // 允许的突发流量大小
+	per   time.Duration // 单位时间
 }
+
+type leakOption func(c *config)
 
 func WithClock(cl Clock) leakOption {
 	return func(c *config) {
 		c.clock = cl
+		if c.clock == nil {
+			c.clock = realClock{}
+		}
 	}
 }
-
-var WithoutSlack leakOption = WithSlack(0)
 
 func WithSlack(slack int) leakOption {
 	return func(c *config) {
@@ -50,22 +66,9 @@ func NewConfig(rate int, opts ...leakOption) config {
 	return c
 }
 
-// Option configures a Limiter.
-type Option interface {
-	apply(*config)
-}
-
-type unlimited struct{}
-
-// NewUnlimited returns a RateLimiter that is not limited.
-func NewUnlimited() Limiter {
-	return unlimited{}
-}
-
-func (unlimited) Take() time.Time {
-	return time.Now()
-}
-
+// cpu cache 一般是以 cache line 为单位的，在 64 位的机器上一般是 64 字节
+// 如果高频并发访问的数据小于 64 字节的时候就可能会和其他数据一起缓存，其他数据如果出现改变就会导致 cpu 认为缓存失效
+// 为了尽可能提高性能，填充了 56 字节的无意义数据
 type atomicInt64Limiter struct {
 	//lint:ignore U1000 Padding is unused but it is crucial to maintain performance
 	// of this rate limiter in case of collocation with other frequently accessed memory.
@@ -79,10 +82,7 @@ type atomicInt64Limiter struct {
 	clock      Clock
 }
 
-// newAtomicBased returns a new atomic based limiter.
 func NewAtomicInt64Based(rate int, opts ...leakOption) *atomicInt64Limiter {
-	// TODO consider moving config building to the implementation
-	// independent code.
 	config := NewConfig(rate, opts...)
 	perRequest := config.per / time.Duration(rate)
 	l := &atomicInt64Limiter{
@@ -122,76 +122,4 @@ func (t *atomicInt64Limiter) Take() time.Time {
 	}
 	t.clock.Sleep(time.Duration(newTimeOfNextPermissionIssue - now))
 	return time.Unix(0, newTimeOfNextPermissionIssue)
-}
-
-type state struct {
-	last     time.Time
-	sleepFor time.Duration
-}
-
-type atomicLimiter struct {
-	state unsafe.Pointer
-	//lint:ignore U1000 Padding is unused but it is crucial to maintain performance
-	padding [56]byte //nolint:structcheck
-
-	perRequest time.Duration
-	maxSlack   time.Duration
-	clock      Clock
-}
-
-// newAtomicBased returns a new atomic based limiter.
-func NewAtomicBased(rate int, opts ...leakOption) *atomicLimiter {
-	// TODO consider moving config building to the implementation
-	// independent code.
-	config := NewConfig(rate, opts...)
-	perRequest := config.per / time.Duration(rate)
-	l := &atomicLimiter{
-		perRequest: perRequest,
-		maxSlack:   -1 * time.Duration(config.slack) * perRequest,
-		clock:      config.clock,
-	}
-
-	initialState := state{
-		last:     time.Time{},
-		sleepFor: 0,
-	}
-	atomic.StorePointer(&l.state, unsafe.Pointer(&initialState))
-	return l
-}
-
-func (t *atomicLimiter) Take() time.Time {
-	var (
-		newState state
-		taken    bool
-		interval time.Duration
-	)
-	for !taken {
-		now := t.clock.Now()
-
-		previousStatePointer := atomic.LoadPointer(&t.state)
-		oldState := (*state)(previousStatePointer)
-
-		newState = state{
-			last:     now,
-			sleepFor: oldState.sleepFor,
-		}
-
-		if oldState.last.IsZero() {
-			taken = atomic.CompareAndSwapPointer(&t.state, previousStatePointer, unsafe.Pointer(&newState))
-			continue
-		}
-
-		newState.sleepFor += t.perRequest - now.Sub(oldState.last)
-
-		if newState.sleepFor < t.maxSlack {
-			newState.sleepFor = t.maxSlack
-		}
-		if newState.sleepFor > 0 {
-			newState.last = newState.last.Add(newState.sleepFor)
-			interval, newState.sleepFor = newState.sleepFor, 0
-		}
-		taken = atomic.CompareAndSwapPointer(&t.state, previousStatePointer, unsafe.Pointer(&newState))
-	}
-	t.clock.Sleep(interval)
-	return newState.last
 }
