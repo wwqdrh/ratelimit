@@ -21,6 +21,46 @@
   </p>
 </div>
 
+# Desc
+
+如果只是简单的单机限流,你应该使用官方的令牌桶算法实现(https://pkg.go.dev/golang.org/x/time/rate)
+
+> 下面是官方rate的示例
+
+```go
+limiter := NewLimiter(10, 1);
+
+limit := Every(100 * time.Millisecond);
+limiter := NewLimiter(limit, 1);
+
+// 当使用 Wait 方法消费 Token 时，如果此时桶内 Token 数组不足 (小于 N)，那么 Wait 方法将会阻塞一段时间，直至 Token 满足条件。
+// 可以设置 context 的 Deadline 或者 Timeout，来决定此次 Wait 的最长时间
+func (lim *Limiter) Wait(ctx context.Context) (err error)
+func (lim *Limiter) WaitN(ctx context.Context, n int) (err error)
+
+// 满足则返回 true，同时从桶中消费 n 个 token。反之返回不消费 Token，false。
+// 通常对应这样的线上场景，如果请求速率过快，就直接丢到某些请求。
+func (lim *Limiter) Allow() bool
+func (lim *Limiter) AllowN(now time.Time, n int) bool
+
+// 无论 Token 是否充足，都会返回一个 Reservation * 对象
+// 你可以调用该对象的 Delay() 方法，该方法返回了需要等待的时间。如果等待时间为 0，则说明不用等待。
+// 如果不想等待，可以调用 Cancel() 方法，该方法会将 Token 归还。
+func (lim *Limiter) Reserve() *Reservation
+func (lim *Limiter) ReserveN(now time.Time, n int) *Reservation
+
+r := lim.Reserve()
+f !r.OK() {
+    // Not allowed to act! Did you remember to set lim.burst to be > 0 ?
+    return
+}
+time.Sleep(r.Delay())
+Act() // 执行相关逻辑
+
+SetLimit(Limit) // 改变放入 Token 的速率
+SetBurst(int) // 改变 Token 桶大小
+```
+
 # Usage
 
 - 固定窗口计数器
